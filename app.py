@@ -59,7 +59,8 @@ QUERY_VARIANTS = [
 st.markdown(f"""
 <style>
 :root {{
-  --brand:#FF6A3D; --brand-dark:#E04F22;
+  --brand:#FF6A3D; --brand-dark:#E04F22; --brand-soft:#FFF1EC;
+  --accent:#3B82F6; --accent-soft:#EFF6FF;
   --ink:{T['ink']}; --muted:{T['muted']};
   --bg:{T['bg']}; --bg-soft:{T['bg_soft']};
   --border:{T['border']}; --card:{T['card']};
@@ -77,94 +78,226 @@ small, .stCaption, [data-testid="stCaptionContainer"] {{ color: var(--muted) !im
 #MainMenu, footer {{ visibility: hidden; }}
 [data-testid="stHeader"] {{ background: transparent !important; }}
 .block-container {{ padding-top:1rem; padding-bottom:3rem; max-width:1500px; }}
+
+/* ---------- Sidebar ---------- */
 [data-testid="stSidebar"] {{ background:{T['sidebar']} !important; border-right:1px solid var(--border); }}
 [data-testid="stSidebar"] * {{ color: var(--ink) !important; }}
+[data-testid="stSidebar"] .sidebar-brand {{
+  display:flex; align-items:center; gap:10px; padding: 4px 0 16px 0;
+  border-bottom:1px solid var(--border); margin-bottom: 14px;
+}}
+[data-testid="stSidebar"] .sidebar-brand .logo {{
+  width:34px; height:34px; border-radius:9px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
+  display:flex; align-items:center; justify-content:center;
+  color:white !important; font-size:18px; font-weight:800;
+  box-shadow: 0 4px 10px rgba(255,106,61,0.3);
+}}
+[data-testid="stSidebar"] .sidebar-brand .name {{ font-weight:700; font-size:15px; }}
+[data-testid="stSidebar"] .sidebar-brand .tag {{ font-size:11px; color:var(--muted) !important; }}
+[data-testid="stSidebar"] .side-section {{
+  font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.7px;
+  color: var(--muted) !important; margin: 12px 0 6px 0;
+  display:flex; align-items:center; gap:6px;
+}}
+[data-testid="stSidebar"] .side-section .ico {{ font-size:13px; }}
+
+/* ---------- Inputs ---------- */
 .stTextInput input, .stTextArea textarea,
 .stSelectbox div[data-baseweb="select"]>div, .stNumberInput input {{
   background: var(--input-bg) !important; color: var(--ink) !important;
   border:1px solid var(--border) !important; border-radius:8px !important;
+  font-size:13px !important;
+}}
+.stTextInput input::placeholder, .stTextArea textarea::placeholder {{
+  color:{('#6B7280' if IS_DARK else '#9CA3AF')} !important; opacity:1;
+}}
+.stTextInput input:focus, .stTextArea textarea:focus {{
+  border-color: var(--brand) !important;
+  box-shadow: 0 0 0 3px rgba(255,106,61,0.12) !important;
 }}
 [data-testid="stSlider"] [role="slider"] {{ background: var(--brand) !important; }}
 
+/* ---------- Header ---------- */
 .app-header {{
   display:flex; align-items:center; justify-content:space-between;
-  padding: 4px 0 14px 0; border-bottom: 1px solid var(--border); margin-bottom: 18px;
+  padding: 6px 0 16px 0; border-bottom: 1px solid var(--border); margin-bottom: 22px;
 }}
-.app-title {{ font-size: 22px; font-weight: 700; color: var(--ink); margin:0;
-  display:flex; align-items:center; gap:10px; }}
-.app-title .dot {{ width:10px; height:10px; border-radius:50%; background:var(--brand); }}
-.app-sub {{ font-size: 13px; color: var(--muted); margin-top: 2px; }}
+.app-title {{ font-size: 24px; font-weight: 700; color: var(--ink); margin:0;
+  display:flex; align-items:center; gap:12px; }}
+.app-title .icon {{
+  width:36px; height:36px; border-radius:10px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
+  display:inline-flex; align-items:center; justify-content:center;
+  color:white !important; font-size:18px; box-shadow: 0 4px 12px rgba(255,106,61,0.25);
+}}
+.app-sub {{ font-size: 13px; color: var(--muted); margin-top: 4px; padding-left:48px; }}
+.live-pill {{
+  display:inline-flex; align-items:center; gap:6px;
+  background: var(--accent-soft); color: var(--accent) !important;
+  padding: 5px 12px; border-radius:999px; font-size: 11px; font-weight:700;
+  letter-spacing:0.4px; border: 1px solid rgba(59,130,246,0.25);
+}}
+.live-pill .dot {{ width:7px; height:7px; border-radius:50%; background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.18); }}
 
-.kpi {{ background:var(--card); border:1px solid var(--border); border-radius:10px;
-  padding:14px 16px; height:100%; }}
-.kpi .label {{ color:var(--muted) !important; font-size:11px; font-weight:600;
-  text-transform:uppercase; letter-spacing:0.5px; }}
-.kpi .value {{ color:var(--ink) !important; font-size:24px; font-weight:700; margin-top:4px; }}
+/* ---------- KPI Cards ---------- */
+.kpi {{ background:var(--card); border:1px solid var(--border); border-radius:12px;
+  padding:16px 18px; height:100%; position:relative; overflow:hidden;
+  transition: transform .15s ease, box-shadow .15s ease;
+}}
+.kpi::before {{
+  content:""; position:absolute; top:0; left:0; right:0; height:3px;
+  background: linear-gradient(90deg, var(--brand), var(--brand-dark));
+}}
+.kpi:hover {{ transform: translateY(-2px); box-shadow: 0 8px 20px rgba(15,26,42,0.08); }}
+.kpi .label {{ color:var(--muted) !important; font-size:11px; font-weight:700;
+  text-transform:uppercase; letter-spacing:0.6px; }}
+.kpi .value {{ color:var(--ink) !important; font-size:28px; font-weight:700; margin-top:6px;
+  display:flex; align-items:center; gap:8px; }}
+.kpi .icon {{ float:right; font-size:18px; background: var(--brand-soft);
+  color:var(--brand) !important; padding:7px 9px; border-radius:8px; margin-top:-2px; }}
+
 .section-title {{ font-size:16px; font-weight:700; color:var(--ink) !important;
-  margin:6px 0 12px 0; display:flex; align-items:center; gap:8px; }}
+  margin:14px 0 12px 0; display:flex; align-items:center; gap:8px; }}
 .section-title .accent {{ width:4px; height:16px; background:var(--brand); border-radius:2px; }}
 
+/* ---------- Buttons ---------- */
 .stButton>button[kind="primary"], .stDownloadButton>button[kind="primary"] {{
-  background:var(--brand) !important; border-color:var(--brand) !important;
-  color:white !important; font-weight:600;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark)) !important;
+  border:none !important; color:white !important; font-weight:600;
+  box-shadow: 0 4px 12px rgba(255,106,61,0.28); border-radius:9px !important;
 }}
 .stButton>button[kind="primary"]:hover, .stDownloadButton>button[kind="primary"]:hover {{
-  background:var(--brand-dark) !important; border-color:var(--brand-dark) !important;
+  box-shadow: 0 6px 16px rgba(255,106,61,0.4); transform: translateY(-1px);
 }}
 .stButton>button, .stDownloadButton>button {{
   background:{T['btn_bg']}; color:var(--ink) !important; border:1px solid var(--border);
+  border-radius:9px !important; font-weight:500;
 }}
-.empty {{ background:var(--bg-soft); border:1px dashed var(--border);
-  border-radius:12px; padding:32px; text-align:center; }}
-.empty * {{ color:var(--muted) !important; }}
-.empty .em-title {{ font-size:15px; font-weight:600; color:var(--ink) !important; margin-top:6px; }}
+
+/* ---------- Empty / welcome state ---------- */
+.welcome-grid {{
+  display:grid; grid-template-columns: repeat(3, 1fr); gap:18px;
+  margin: 20px 0 26px 0;
+}}
+.feat-card {{
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 14px; padding: 22px; position: relative; overflow:hidden;
+  transition: transform .18s ease, box-shadow .18s ease;
+}}
+.feat-card:hover {{ transform: translateY(-3px); box-shadow: 0 12px 28px rgba(15,26,42,0.08); }}
+.feat-card .icon-wrap {{
+  width:44px; height:44px; border-radius:11px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:20px; margin-bottom:14px;
+}}
+.feat-card .icon-orange {{ background: var(--brand-soft); color: var(--brand) !important; }}
+.feat-card .icon-blue   {{ background: var(--accent-soft); color: var(--accent) !important; }}
+.feat-card .icon-green  {{ background: #DCFCE7; color: #16A34A !important; }}
+.feat-card h3 {{ font-size:15px; font-weight:700; margin:0 0 6px 0; color:var(--ink); }}
+.feat-card p {{ font-size:13px; color:var(--muted) !important; line-height:1.55; margin:0; }}
+
+.welcome-cta {{
+  background: linear-gradient(135deg,#0F1A2A 0%,#1E2A44 100%);
+  border-radius:14px; padding: 28px 32px; color:white !important;
+  display:flex; align-items:center; justify-content:space-between; gap:24px;
+  margin-bottom: 18px;
+}}
+.welcome-cta * {{ color:white !important; }}
+.welcome-cta h2 {{ font-size:22px; font-weight:700; margin:0; }}
+.welcome-cta p {{ font-size:14px; color:#C5CCD8 !important; margin:4px 0 0 0; }}
+.welcome-cta .step-pills {{ display:flex; gap:10px; flex-shrink:0; }}
+.welcome-cta .pill {{
+  background: rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.18);
+  padding: 8px 14px; border-radius: 999px; font-size:12px; font-weight:600;
+}}
+
+.tips {{
+  background: var(--bg-soft); border:1px solid var(--border);
+  border-radius:12px; padding:18px 20px; margin-top:8px;
+}}
+.tips .tip-title {{ font-size:13px; font-weight:700; color:var(--ink) !important;
+  display:flex; align-items:center; gap:6px; margin-bottom:8px; }}
+.tips ul {{ margin:0; padding-left:18px; color:var(--muted) !important; font-size:13px; line-height:1.7; }}
+.tips ul li {{ color:var(--muted) !important; }}
+.tips ul li b {{ color: var(--ink) !important; }}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- HEADER (clean, no big hero) ----------
+# ---------- HEADER ----------
 hcol1, hcol2 = st.columns([8, 2])
 with hcol1:
     st.markdown("""
     <div class="app-header">
-      <div>
-        <div class="app-title"><span class="dot"></span>Topic Research</div>
-        <div class="app-sub">Surfaces real topic ideas your competitors rank for that you don't yet cover — built for both Google search and LLM citations.</div>
+      <div style="flex:1;">
+        <div class="app-title">
+          <span class="icon">🎯</span>
+          <span>Topic Research <span style="font-weight:400;color:var(--muted);font-size:16px;">— Content Gap Engine</span></span>
+        </div>
+        <div class="app-sub">
+          Surfaces real topic ideas your competitors rank for that you don't yet cover — built for both Google search and LLM citations.
+        </div>
       </div>
+      <div><span class="live-pill"><span class="dot"></span>LIVE SERP DATA</span></div>
     </div>
     """, unsafe_allow_html=True)
 with hcol2:
     st.write("")
-    if st.button("Dark mode" if not IS_DARK else "Light mode", use_container_width=True):
+    if st.button("🌙 Dark" if not IS_DARK else "☀️ Light", use_container_width=True):
         st.session_state.theme = "dark" if not IS_DARK else "light"
         st.rerun()
 
 # ---------- SIDEBAR ----------
 with st.sidebar:
-    st.markdown("### Your Website")
-    st.caption("Required. We scan what you already cover so we only suggest NEW topics.")
-    your_site = st.text_input("Your domain", label_visibility="collapsed")
+    st.markdown("""
+    <div class="sidebar-brand">
+      <div class="logo">R</div>
+      <div>
+        <div class="name">RankFinder Pro</div>
+        <div class="tag">Topic & Gap Intelligence</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("### Seed Keywords")
+    st.markdown('<div class="side-section"><span class="ico">🌐</span> YOUR WEBSITE</div>',
+                unsafe_allow_html=True)
+    your_site = st.text_input(
+        "Your domain", label_visibility="collapsed",
+        placeholder="e.g. yourdomain.com",
+    )
+    st.caption("We scan what you already cover so we only suggest NEW topics.")
+
+    st.markdown('<div class="side-section"><span class="ico">🎯</span> SEED KEYWORDS</div>',
+                unsafe_allow_html=True)
+    keyword_input = st.text_area(
+        "Keywords", height=150, label_visibility="collapsed", key="kw_input",
+        placeholder=("e.g.\n"
+                     "farm management software\n"
+                     "livestock tracking app\n"
+                     "agriculture ERP solutions"),
+    )
     st.caption("One per line. Leave empty to auto-discover from your site.")
-    keyword_input = st.text_area("Keywords", height=160, label_visibility="collapsed", key="kw_input")
 
-    st.markdown("---")
-    st.markdown("### Serper.dev API Key")
-    serper_key = st.text_input("Serper key", type="password", label_visibility="collapsed",
-                               help="Free 2,500 queries at https://serper.dev")
+    st.markdown('<div class="side-section"><span class="ico">🔑</span> API KEY</div>',
+                unsafe_allow_html=True)
+    serper_key = st.text_input(
+        "Serper key", type="password", label_visibility="collapsed",
+        placeholder="Paste your Serper.dev API key",
+        help="Free 2,500 queries at https://serper.dev",
+    )
 
-    st.markdown("---")
-    st.markdown("### Settings")
-    market = st.selectbox("Market", list(MARKET_TO_GL.keys()))
+    st.markdown('<div class="side-section"><span class="ico">⚙️</span> SETTINGS</div>',
+                unsafe_allow_html=True)
+    market = st.selectbox("Market focus", list(MARKET_TO_GL.keys()))
     topics_per_keyword = st.slider("Topic ideas per keyword", 5, 40, 20)
     competitors_per_keyword = st.slider("Competitors mined per keyword", 1, 5, 3)
     min_new_tokens = st.slider("Gap strictness (min new words)", 1, 4, 2,
         help="Higher = stricter. Topic must introduce this many words your site doesn't cover.")
-    use_expansion = st.checkbox("Use query expansion (richer ideas, more API calls)", value=True)
+    use_expansion = st.checkbox("Query expansion (richer ideas, more API calls)", value=True)
 
-    st.markdown("---")
-    run_analysis = st.button("Run Topic Research", type="primary", use_container_width=True)
+    st.markdown('<div style="margin-top:18px;"></div>', unsafe_allow_html=True)
+    run_analysis = st.button("🚀 Run Topic Research", type="primary", use_container_width=True)
     st.caption("Powered by Serper.dev — real Google SERP data")
 
 
@@ -462,10 +595,46 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
 # ---------- MAIN ----------
 if not run_analysis:
     st.markdown("""
-    <div class="empty">
-      <div class="em-title">Ready to find topics you don't yet cover</div>
-      <div>Enter your website URL on the left, optionally paste seed keywords, add your Serper.dev key, and run.</div>
-    </div>""", unsafe_allow_html=True)
+    <div class="welcome-cta">
+      <div>
+        <h2>Find what your competitors rank for — and you don't</h2>
+        <p>Real Google SERP analysis + competitor article mining + LLM-citation scoring. No fluff topics, no AI hallucinations.</p>
+      </div>
+      <div class="step-pills">
+        <div class="pill">1 · Enter URL</div>
+        <div class="pill">2 · Add Seeds</div>
+        <div class="pill">3 · Run</div>
+      </div>
+    </div>
+
+    <div class="welcome-grid">
+      <div class="feat-card">
+        <div class="icon-wrap icon-orange">🔍</div>
+        <h3>Site Profiling</h3>
+        <p>We scan your existing pages via real Google index data, then filter every suggested topic against what you already cover — so you only ever see <b>new</b> ideas.</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon-wrap icon-blue">📊</div>
+        <h3>Competitor Mining</h3>
+        <p>We pull the actual article titles your top-ranking competitors are publishing for each seed keyword — the exact pages winning traffic today.</p>
+      </div>
+      <div class="feat-card">
+        <div class="icon-wrap icon-green">🤖</div>
+        <h3>SEO + AEO Ready</h3>
+        <p>Each topic is scored for both <b>Google ranking</b> potential (CTR, listicles, comparisons) and <b>LLM citation</b> potential (Q&A, definitions, how-to).</p>
+      </div>
+    </div>
+
+    <div class="tips">
+      <div class="tip-title">💡 Tips for best results</div>
+      <ul>
+        <li><b>Use 3–5 specific seed keywords</b> rather than one generic term. The narrower the seed, the better the topic ideas.</li>
+        <li><b>Leave keywords empty</b> if you want the tool to auto-discover seeds from your site's strongest themes.</li>
+        <li><b>Bump up "Competitors mined per keyword"</b> if your niche has many strong players — more sources, richer ideas.</li>
+        <li><b>Lower "Gap strictness"</b> if you have a large existing site and few results pass through.</li>
+      </ul>
+    </div>
+    """, unsafe_allow_html=True)
     st.stop()
 
 if not your_site.strip():
@@ -525,16 +694,17 @@ google_count = sum(1 for g in all_ideas if "Google" in g["channel"] or "Both" in
 unique_competitors = len({g["ranking_competitor"] for g in all_ideas if g["ranking_competitor"]})
 
 kpis = [
-    ("Seed Keywords", len(seed_keywords)),
-    ("New Topic Ideas", len(all_ideas)),
-    ("LLM-Citation Topics", llm_count),
-    ("Google-Ranking Topics", google_count),
-    ("Competitors Found", unique_competitors),
+    ("Seed Keywords", len(seed_keywords), "🎯"),
+    ("New Topic Ideas", len(all_ideas), "💡"),
+    ("LLM-Citation Topics", llm_count, "🤖"),
+    ("Google-Ranking Topics", google_count, "🔍"),
+    ("Competitors Found", unique_competitors, "🏆"),
 ]
 cols = st.columns(len(kpis))
-for col, (label, value) in zip(cols, kpis):
+for col, (label, value, icon) in zip(cols, kpis):
     col.markdown(f"""
     <div class="kpi">
+      <span class="icon">{icon}</span>
       <div class="label">{label}</div>
       <div class="value">{value}</div>
     </div>""", unsafe_allow_html=True)
