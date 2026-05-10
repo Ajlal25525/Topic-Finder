@@ -5,7 +5,7 @@ import requests
 import re
 import random
 from collections import Counter
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 
 # ---------- PAGE CONFIG ----------
 st.set_page_config(
@@ -71,6 +71,22 @@ ARTICLE_STARTERS = {"how","what","why","when","where","which","who",
                     "best","top","guide","ultimate","complete","essential",
                     "the","a","an","is","are","do","does","can","should","will",
                     "introducing","everything","beginner","beginners","ultimate"}
+
+JUNK_QUERY_TOKENS = {"synonym","synonyms","pdf","doc","docx","ppt","pptx","ebook",
+                     "wikipedia","wiki","translate","translation","login","logo",
+                     "youtube","video","videos","picture","pictures","images","image",
+                     "crack","torrent","jobs","salary","salaries","resume","cv",
+                     "near","quizlet","reddit","quora"}
+
+def is_junk_query(query):
+    ql = (query or "").lower()
+    if not ql: return True
+    words = set(re.findall(r"[a-z][a-z\-]+", ql))
+    if words & JUNK_QUERY_TOKENS: return True
+    # Dated year query (2018-2024) without a clear "best/top/guide" angle = noise
+    if re.search(r"\b20(1\d|2[0-4])\b", ql) and not any(w in ql for w in ["best","top","guide"]):
+        return True
+    return False
 
 # ---------- CSS ----------
 st.markdown(f"""
@@ -307,7 +323,8 @@ with st.sidebar:
     st.markdown('<div class="side-section"><span class="ico">⚙️</span> SETTINGS</div>',
                 unsafe_allow_html=True)
     market = st.selectbox("Market focus", list(MARKET_TO_GL.keys()))
-    topics_per_keyword = st.slider("Topic ideas per keyword", 5, 40, 20)
+    topics_per_keyword = st.slider("Topic ideas per keyword (max)", 5, 15, 10,
+        help="Quality over quantity. The tool returns fewer if it can't find enough strong, unique ideas.")
     competitors_per_keyword = st.slider("Competitors mined per keyword", 1, 5, 3)
     min_new_tokens = st.slider("Gap strictness (min new words)", 1, 4, 2,
         help="Higher = stricter. Topic must introduce this many words your site doesn't cover.")
@@ -355,6 +372,28 @@ def classify_intent(text):
         return "Informational"
     return "Informational"
 
+def google_search_url(query, gl="us"):
+    return f"https://www.google.com/search?q={quote_plus(query)}&gl={gl}"
+
+def jaccard(a, b):
+    if not a or not b: return 0.0
+    return len(a & b) / len(a | b)
+
+def dedupe_topics(ideas, similarity_threshold=0.55):
+    """Drop topics with high token overlap with already-kept ideas."""
+    kept, kept_token_sets = [], []
+    for idea in ideas:
+        toks = tokens_of(idea["topic_idea"])
+        if not toks: continue
+        is_dup = False
+        for existing in kept_token_sets:
+            if jaccard(toks, existing) >= similarity_threshold:
+                is_dup = True; break
+        if not is_dup:
+            kept.append(idea)
+            kept_token_sets.append(toks)
+    return kept
+
 def has_brand_modifier(query, seed_tokens):
     """True if query starts with a non-seed, non-generic word (likely a brand/product name)."""
     words = re.findall(r"[a-z][a-z\-]+", (query or "").lower())
@@ -365,25 +404,29 @@ def has_brand_modifier(query, seed_tokens):
     return True
 
 def to_article_title(query):
-    """Transform a raw keyword/query into a real article-shaped headline."""
-    if not query: return ""
+    """Transform a raw keyword into a real article-shaped headline.
+    Returns None if no specific template fits — never falls back to a generic guide."""
+    if not query: return None
     q = query.strip().rstrip("?")
     ql = q.lower()
     Y = CURRENT_YEAR
 
-    # already a question
-    if ql.startswith(("what ","how ","why ","when ","where ","which ","who ",
-                      "is ","are ","can ","do ","does ","should ","will ",
-                      "how to ")):
+    if is_junk_query(q): return None
+
+    # Already a question — keep as is
+    if ql.startswith(("what ","what's ","how ","why ","when ","where ","which ","who ",
+                      "is ","are ","can ","do ","does ","should ","will ","how to ")):
         s = q[0].upper() + q[1:]
         return s if s.endswith("?") else s + "?"
 
-    # "best X" / "top X"
+    # "best X" / "top X"  — only if rest doesn't have a dated year
     if ql.startswith("best "):
         rest = q[5:].strip()
+        if re.search(r"\b20\d\d\b", rest): return None
         return f"The 9 Best {rest.title()} in {Y} (Tested, Compared & Ranked)"
     if ql.startswith("top "):
         rest = q[4:].strip()
+        if re.search(r"\b20\d\d\b", rest): return None
         return f"Top {rest.title()}: {Y} Buyer's Guide With Real Comparisons"
 
     # "free X"
@@ -403,7 +446,7 @@ def to_article_title(query):
         rest = parts[1] if len(parts) > 1 else q
         return f"The Easiest {rest.title()} for Beginners ({Y} Picks)"
 
-    # "online / cloud / mobile / web-based X"
+    # "online / cloud / mobile / web-based / saas X"
     if ql.startswith(("online ","cloud ","mobile ","web-based ","web based ","saas ")):
         parts = q.split(" ", 1)
         prefix = parts[0]; rest = parts[1] if len(parts) > 1 else q
@@ -414,23 +457,15 @@ def to_article_title(query):
         rest = re.sub(r"^open[ \-]source ", "", q, flags=re.I)
         return f"Open-Source {rest.title()}: Pros, Cons & Top Picks"
 
-    # "X for Y"
-    if " for " in ql:
-        return f"{q.title()}: A Complete {Y} Guide"
-
-    # "X vs Y"
+    # "X vs Y" — comparison
     if " vs " in ql or " vs. " in ql:
         return f"{q.title()}: Which Should You Choose in {Y}?"
 
     # "X cost / price / pricing"
-    if any(w in ql for w in [" cost", " price", " pricing"]):
+    if re.search(r"\b(cost|price|pricing)\b", ql):
         base = re.sub(r"\b(cost|price|pricing)\b", "", q, flags=re.I).strip()
+        if not base: return None
         return f"How Much Does {base.title()} Cost in {Y}? Real Pricing Breakdown"
-
-    # "X download"
-    if "download" in ql:
-        base = ql.replace("download","").strip()
-        return f"Where to Download {base.title()}: Safe & Verified Sources"
 
     # "X alternative(s)"
     if "alternative" in ql:
@@ -444,13 +479,22 @@ def to_article_title(query):
     if " for sale" in ql or ql.startswith("buy "):
         return f"{q.title()}: Where to Buy & What to Look For ({Y})"
 
-    # default — make it a definitive guide
-    return f"The Complete Guide to {q.title()} ({Y} Edition)"
+    # NO GENERIC FALLBACK — skip if no specific template fits
+    return None
 
 def rationale_for(source, comp_domain):
+    if "Reddit" in source:
+        return ("Real users actively discussing this on Reddit — strong human-demand signal with "
+                "real pain points. Perplexity and ChatGPT heavily cite Reddit threads, so a "
+                "definitive guide here can capture both Google traffic AND become the LLM-cited "
+                "answer for this query.")
+    if "Quora" in source:
+        return ("People asking this exact question on Quora — direct demand signal that often "
+                "precedes Google's PAA. Quora questions map to long-tail Google searches with "
+                "lower competition than head terms.")
     if "People Also Ask" in source:
         return ("Google explicitly surfaces this question on the SERP — direct, validated demand. "
-                "Pages that answer it cleanly often capture the AI Overview slot AND get cited by "
+                "Pages that answer it cleanly capture the AI Overview slot AND get cited by "
                 "ChatGPT/Perplexity for the same question.")
     if "Related Search" in source:
         return ("Google's 'searches related to' identifies this as part of the topic cluster around "
@@ -528,6 +572,42 @@ def serper_search(query, api_key, gl="us", num=10):
     r.raise_for_status()
     return r.json()
 
+def _clean_reddit_title(title):
+    title = re.sub(r"\s*[:\-]\s*r/\w+.*$", "", title or "", flags=re.I)
+    title = re.sub(r"\s*\|\s*Reddit.*$", "", title, flags=re.I)
+    title = re.sub(r"\s*-\s*Reddit\s*$", "", title, flags=re.I)
+    return title.strip()
+
+def _clean_quora_title(title):
+    title = re.sub(r"\s*-\s*Quora\s*$", "", title or "", flags=re.I)
+    title = re.sub(r"\s*\|\s*Quora.*$", "", title, flags=re.I)
+    return title.strip()
+
+def fetch_community_topics(keyword, serper_key, gl, max_results=8):
+    """Real human questions and discussions from Reddit and Quora."""
+    out = {"reddit": [], "quora": []}
+    try:
+        rs = serper_search(f"site:reddit.com {keyword}", serper_key, gl=gl, num=max_results)
+        for o in (rs.get("organic") or []):
+            title = _clean_reddit_title(o.get("title", ""))
+            link  = o.get("link", "")
+            snip  = o.get("snippet", "")
+            if title and len(title) >= 15 and len(title.split()) >= 4:
+                out["reddit"].append({"title": title, "link": link, "snippet": snip})
+    except Exception:
+        pass
+    try:
+        qs = serper_search(f"site:quora.com {keyword}", serper_key, gl=gl, num=max_results)
+        for o in (qs.get("organic") or []):
+            title = _clean_quora_title(o.get("title", ""))
+            link  = o.get("link", "")
+            snip  = o.get("snippet", "")
+            if title and len(title) >= 15 and len(title.split()) >= 4:
+                out["quora"].append({"title": title, "link": link, "snippet": snip})
+    except Exception:
+        pass
+    return out
+
 def fetch_competitor_articles(competitor_domain, keyword, serper_key, gl,
                               keyword_tokens, max_pages=10):
     """Pull only quality, article-shaped pages from a competitor for a keyword."""
@@ -592,12 +672,14 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
 
     def add(topic, intent_hint, source, comp_domain, comp_url, snippet,
             how_to_rank, how_for_llm, raw_query=None):
-        # Use the transformed article-shaped title, except for competitor articles
-        # (which are already real titles).
-        if source.startswith("Competitor Article"):
+        # Competitor articles, Reddit, Quora are already real titles — keep verbatim.
+        # PAA + Related Searches go through transformation.
+        if source.startswith("Competitor Article") or source in ("Reddit Discussion","Quora Question"):
             display_topic = topic
         else:
             display_topic = to_article_title(topic)
+            if not display_topic:  # no specific template fit — skip
+                return
 
         key = (display_topic or "").lower().strip()
         if not key or key in seen: return
@@ -651,12 +733,13 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
         # PAA — real user questions (already topic-shaped)
         for q in paa:
             question = (q.get("question") or "").strip()
+            if not question: continue
             add(
                 topic=question,
                 intent_hint=classify_intent(question),
                 source="People Also Ask",
-                comp_domain=domain_of(proof.get("link", "")),
-                comp_url=proof.get("link", ""),
+                comp_domain="google.com",
+                comp_url=google_search_url(question, gl=gl),
                 snippet=proof.get("snippet", ""),
                 how_to_rank=(
                     f"This is a real user question on the '{query}' SERP. Publish a page titled "
@@ -682,8 +765,8 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
                 topic=rq,
                 intent_hint=classify_intent(rq),
                 source="Related Search",
-                comp_domain="",
-                comp_url="",
+                comp_domain="google.com",
+                comp_url=google_search_url(rq, gl=gl),
                 snippet="Google surfaces this as a related query — strong topic-cluster signal.",
                 how_to_rank=(
                     f"Build a dedicated supporting page for '{rq}' and internally link it to your "
@@ -695,6 +778,33 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
                 ),
                 raw_query=rq,
             )
+
+    # Community discussions — Reddit + Quora (real human questions / pain points)
+    community = fetch_community_topics(keyword, serper_key, gl, max_results=8)
+    for r in community["reddit"]:
+        add(
+            topic=r["title"],
+            intent_hint="Informational",
+            source="Reddit Discussion",
+            comp_domain="reddit.com",
+            comp_url=r["link"],
+            snippet=r["snippet"],
+            how_to_rank="",
+            how_for_llm="",
+            raw_query=r["title"],
+        )
+    for q in community["quora"]:
+        add(
+            topic=q["title"],
+            intent_hint="Informational",
+            source="Quora Question",
+            comp_domain="quora.com",
+            comp_url=q["link"],
+            snippet=q["snippet"],
+            how_to_rank="",
+            how_for_llm="",
+            raw_query=q["title"],
+        )
 
     # Competitor articles (real, filtered) — using base keyword
     for cd in competitor_domains[:max_competitors]:
@@ -721,10 +831,15 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
                 raw_query=art["title"],
             )
 
-    # Priority order: PAA → Competitor articles → Related
-    rank = {"People Also Ask": 0}
-    ideas.sort(key=lambda g: (rank.get(g["source"],
-               1 if g["source"].startswith("Competitor") else 2)))
+    # Priority: PAA → Reddit → Quora → Competitor → Related
+    priority = {"People Also Ask": 0, "Reddit Discussion": 1, "Quora Question": 2}
+    def _p(src):
+        if src in priority: return priority[src]
+        if src.startswith("Competitor"): return 3
+        return 4
+    ideas.sort(key=lambda g: _p(g["source"]))
+    # Dedupe near-identical topic ideas (Jaccard >= 0.55)
+    ideas = dedupe_topics(ideas, similarity_threshold=0.55)
     return ideas[:count]
 
 
@@ -815,6 +930,9 @@ with st.status("Running topic research…", expanded=True) as status:
         st.write(f"  • `{kw}` → **{len(ideas)}** quality topic ideas.")
         all_ideas.extend(ideas)
 
+    # Global dedupe across all seed keywords so the same topic doesn't appear twice
+    all_ideas = dedupe_topics(all_ideas, similarity_threshold=0.55)
+
     status.update(label="Analysis complete", state="complete", expanded=False)
 
 if errors:
@@ -829,9 +947,12 @@ llm_count    = sum(1 for g in all_ideas if "LLM" in g["channel"] or "Both" in g[
 google_count = sum(1 for g in all_ideas if "Google" in g["channel"] or "Both" in g["channel"])
 unique_competitors = len({g["ranking_competitor"] for g in all_ideas if g["ranking_competitor"]})
 
+community_count = sum(1 for g in all_ideas if g["source"] in ("Reddit Discussion","Quora Question"))
+
 kpis = [
     ("Seed Keywords", len(seed_keywords), "🎯"),
     ("New Topic Ideas", len(all_ideas), "💡"),
+    ("Community Signals", community_count, "💬"),
     ("LLM-Citation Topics", llm_count, "🤖"),
     ("Google-Ranking Topics", google_count, "🔍"),
     ("Competitors Found", unique_competitors, "🏆"),
@@ -853,9 +974,6 @@ if df.empty:
     st.info("No new topic ideas surfaced. Try lowering 'Gap strictness', adding more seed keywords, "
             "or increasing 'Competitors mined per keyword'.")
 else:
-    df["difficulty"]  = df["topic_idea"].apply(difficulty_for)
-    df["opportunity"] = df["topic_idea"].apply(opportunity_for)
-
     st.markdown('<div class="section-title"><span class="accent"></span>Topic Ideas (Not Yet Covered on Your Site)</div>',
                 unsafe_allow_html=True)
 
@@ -877,33 +995,26 @@ else:
              df["intent"].isin(in_filter) &
              df["source"].isin(src_filter)].copy()
 
-    cols_order = ["topic_idea","why_cover","channel","intent","source",
-                  "raw_query","ranking_competitor","competitor_url",
-                  "what_they_cover","how_to_rank_google","how_to_get_cited_by_llms",
-                  "seed_keyword","difficulty","opportunity"]
+    cols_order = ["topic_idea","source","channel","intent","why_cover",
+                  "ranking_competitor","competitor_url"]
     cols_order = [c for c in cols_order if c in fdf.columns]
 
     st.dataframe(
         fdf[cols_order],
         use_container_width=True, hide_index=True,
         column_config={
-            "topic_idea":               st.column_config.TextColumn("Topic Idea (Article Headline)", width="large"),
-            "why_cover":                st.column_config.TextColumn("Why Cover This", width="large"),
-            "channel":                  st.column_config.TextColumn("Best Channel", width="small"),
-            "intent":                   st.column_config.TextColumn("Intent", width="small"),
-            "source":                   st.column_config.TextColumn("Source", width="small"),
-            "raw_query":                st.column_config.TextColumn("Underlying Query", width="medium"),
-            "ranking_competitor":       st.column_config.TextColumn("Competitor", width="small"),
-            "competitor_url":           st.column_config.LinkColumn("Competitor URL"),
-            "what_they_cover":          st.column_config.TextColumn("What They Cover", width="medium"),
-            "how_to_rank_google":       st.column_config.TextColumn("How To Rank on Google", width="large"),
-            "how_to_get_cited_by_llms": st.column_config.TextColumn("How To Get Cited by LLMs", width="large"),
-            "seed_keyword":             st.column_config.TextColumn("Seed", width="small"),
+            "topic_idea":         st.column_config.TextColumn("Topic Idea", width="large"),
+            "source":             st.column_config.TextColumn("Source", width="small"),
+            "channel":            st.column_config.TextColumn("Channel", width="small"),
+            "intent":             st.column_config.TextColumn("Intent", width="small"),
+            "why_cover":          st.column_config.TextColumn("Why Cover This", width="large"),
+            "ranking_competitor": st.column_config.TextColumn("Source / Competitor", width="small"),
+            "competitor_url":     st.column_config.LinkColumn("Source URL"),
         }
     )
 
     st.download_button(
-        "Download CSV",
+        "⬇️ Download CSV",
         fdf[cols_order].to_csv(index=False).encode("utf-8"),
         "topic_ideas.csv", "text/csv"
     )
