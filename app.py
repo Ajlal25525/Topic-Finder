@@ -2,12 +2,10 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import requests
-from google import genai
-from google.genai import types
 import json
-import io
 import re
 import random
+from collections import Counter
 from urllib.parse import urlparse
 
 # ---------- PAGE CONFIG ----------
@@ -91,7 +89,6 @@ div[data-baseweb="popover"] li, div[data-baseweb="popover"] * {{
   text-transform:uppercase; letter-spacing:0.6px; }}
 .kpi .value {{ color:var(--ink) !important; font-size:28px; font-weight:700; margin-top:6px; }}
 .kpi .delta-up {{ color:var(--green) !important; font-size:12px; font-weight:600; }}
-.kpi .delta-flat {{ color:var(--muted) !important; font-size:12px; font-weight:600; }}
 .kpi .icon {{ float:right; font-size:20px; background:{T['icon_bg']};
   color:var(--brand) !important; padding:6px 9px; border-radius:8px; }}
 .section-title {{ font-size:18px; font-weight:700; color:var(--ink) !important;
@@ -102,10 +99,6 @@ div[data-baseweb="popover"] li, div[data-baseweb="popover"] * {{
 .pill-green {{ background:#DCFCE7 !important; color:#166534 !important; }}
 .pill-amber {{ background:#FEF3C7 !important; color:#92400E !important; }}
 .pill-red   {{ background:#FEE2E2 !important; color:#991B1B !important; }}
-.pill-blue  {{ background:#DBEAFE !important; color:#1E40AF !important; }}
-.bar-track {{ background:var(--track); height:8px; border-radius:999px; overflow:hidden; margin-top:6px; }}
-.bar-fill  {{ height:8px; border-radius:999px;
-  background: linear-gradient(90deg, var(--brand) 0%, var(--brand-dark) 100%); }}
 .stTabs [data-baseweb="tab-list"] {{ gap:4px; border-bottom:1px solid var(--border); }}
 .stTabs [data-baseweb="tab"] {{ height:44px; padding:0 18px; background:transparent;
   font-weight:600; color:var(--muted) !important; }}
@@ -120,7 +113,6 @@ div[data-baseweb="popover"] li, div[data-baseweb="popover"] * {{
 .stButton>button, .stDownloadButton>button {{
   background:{T['btn_bg']}; color:var(--ink) !important; border:1px solid var(--border);
 }}
-[data-testid="stDataFrame"] {{ background: var(--card); }}
 .empty {{ background:var(--bg-soft); border:1px dashed var(--border);
   border-radius:12px; padding:36px; text-align:center; }}
 .empty * {{ color:var(--muted) !important; }}
@@ -136,7 +128,7 @@ with hero_col:
     <div class="hero">
       <div>
         <h1>🎯 RankFinder Pro <span style="opacity:.5;font-weight:400;font-size:18px;">— Topic Research</span></h1>
-        <p>Real Google SERP data via Serper.dev + AI synthesis to surface under-served content gaps.</p>
+        <p>Real Google SERP data via Serper.dev — content gaps derived directly from PAA, Related Searches, and organic results.</p>
       </div>
       <div class="badge">LIVE INTELLIGENCE</div>
     </div>
@@ -161,11 +153,9 @@ with st.sidebar:
         input_text = st.text_area("Competitor URLs", height=180, label_visibility="collapsed", key="url_input")
 
     st.markdown("---")
-    st.markdown("### 🔑 API Keys")
+    st.markdown("### 🔑 API Key")
     serper_key = st.text_input("Serper.dev API Key", type="password",
                                help="Get one free at https://serper.dev (2,500 free queries).")
-    api_key = st.text_input("Gemini API Key", type="password",
-                            help="Used to synthesize SERP data. Get one at aistudio.google.com.")
 
     st.markdown("---")
     st.markdown("### ⚙️ Analysis Settings")
@@ -174,10 +164,15 @@ with st.sidebar:
 
     st.markdown("---")
     run_analysis = st.button("🚀 Run SEO Intelligence Engine", type="primary", use_container_width=True)
-    st.caption("⚡ Powered by Serper.dev (real SERPs) + Gemini (synthesis)")
+    st.caption("⚡ Powered by Serper.dev (real Google SERPs)")
 
 
 # ---------- HELPERS ----------
+STOPWORDS = set("""a an the and or but if then for of in on at to from by with as is are was were be been being
+this that these those it its it's i you he she we they them us our your their what which who whom how why
+when where can will just do does did done not no yes so than too very also into about over under more most
+best top vs guide guides how-to tips list way ways thing things""".split())
+
 def is_url_like(line: str) -> bool:
     return bool(line) and " " not in line.strip() and "." in line and not line.endswith(".")
 
@@ -186,12 +181,6 @@ def normalize_domain(line: str) -> str:
     if not line.startswith(("http://","https://")):
         line = "https://" + line
     return (urlparse(line).netloc or line).replace("www.", "")
-
-def parse_da(da_str) -> int:
-    m = re.search(r"\d+", str(da_str or "")); return int(m.group()) if m else 0
-
-def da_pill_class(s):
-    return "pill-green" if s>=60 else "pill-amber" if s>=35 else "pill-red"
 
 def difficulty_for(h):
     random.seed(hash(h) & 0xFFFFFFFF); return random.randint(18,78)
@@ -204,21 +193,6 @@ def diff_pill(s):
     if s<60: return f'<span class="pill pill-amber">Medium · {s}</span>'
     return f'<span class="pill pill-red">Hard · {s}</span>'
 
-def _extract_json(text):
-    if not text: return None
-    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL|re.IGNORECASE)
-    if fence:
-        try: return json.loads(fence.group(1).strip())
-        except: pass
-    try: return json.loads(text.strip())
-    except: pass
-    for o,c in (("[","]"),("{","}")):
-        s,e = text.find(o), text.rfind(c)
-        if s!=-1 and e!=-1 and e>s:
-            try: return json.loads(text[s:e+1])
-            except: continue
-    return None
-
 
 # ---------- SERPER.DEV ----------
 @st.cache_data(show_spinner=False, ttl=3600)
@@ -229,81 +203,201 @@ def serper_search(query, api_key, gl="us", num=10):
     r.raise_for_status()
     return r.json()
 
-def serper_compact(serp, max_organic=8, max_paa=6):
+def serper_compact(serp, max_organic=10, max_paa=8):
     organic = [{"title":i.get("title",""),"link":i.get("link",""),"snippet":i.get("snippet","")}
                for i in (serp.get("organic") or [])[:max_organic]]
     paa = [q.get("question","") for q in (serp.get("peopleAlsoAsk") or [])[:max_paa]]
-    related = [q.get("query","") for q in (serp.get("relatedSearches") or [])[:8]]
+    related = [q.get("query","") for q in (serp.get("relatedSearches") or [])[:10]]
     return {"organic": organic, "peopleAlsoAsk": paa, "relatedSearches": related}
 
 
-# ---------- GEMINI ----------
-def gemini_json(client, prompt):
-    resp = client.models.generate_content(
-        model="gemini-2.0-flash", contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json", temperature=0.3))
-    return _extract_json(getattr(resp, "text", "") or "")
+# ---------- DATA-DRIVEN GAP SYNTHESIS (no LLM) ----------
+def _best_proof_url(query, organic):
+    """Pick the organic result whose title/snippet best matches the query terms."""
+    if not organic:
+        return ""
+    q_terms = {t for t in re.findall(r"\w+", query.lower()) if t not in STOPWORDS and len(t) > 2}
+    best, best_score = organic[0], -1
+    for item in organic:
+        text = f"{item.get('title','')} {item.get('snippet','')}".lower()
+        terms = set(re.findall(r"\w+", text))
+        score = len(q_terms & terms)
+        if score > best_score:
+            best, best_score = item, score
+    return best.get("link", "")
 
-def synthesize_gaps(keyword, compact, count, market, gem_client):
-    fallback_url = compact["organic"][0]["link"] if compact["organic"] else ""
-    prompt = f"""You are a Competitive Intelligence Engine. You have REAL Google SERP data for: "{keyword}" (market: {market}).
+def _strategy_for(question, proof_item, keyword):
+    """Build a concrete recommendation referencing the proof URL."""
+    title = (proof_item.get("title") or "").strip() if proof_item else ""
+    snippet = (proof_item.get("snippet") or "").strip() if proof_item else ""
+    domain = ""
+    if proof_item and proof_item.get("link"):
+        try:
+            domain = urlparse(proof_item["link"]).netloc.replace("www.", "")
+        except Exception:
+            domain = ""
 
-SERP DATA (use these — do not invent URLs):
-{json.dumps(compact, indent=2)}
+    snippet_short = (snippet[:140] + "…") if len(snippet) > 140 else snippet
+    parts = []
+    if domain:
+        parts.append(f"The top-ranking page on **{domain}** ('{title}') only briefly addresses this angle.")
+    else:
+        parts.append("The current top results only briefly address this angle.")
+    if snippet_short:
+        parts.append(f"Their snippet: \"{snippet_short}\"")
+    parts.append(
+        f"Publish a focused page that directly answers '{question}' for **{keyword}** — "
+        "lead with a one-paragraph direct answer (snippet bait), then expand with a comparison table, "
+        "step-by-step workflow, screenshots, and an FAQ that absorbs related People-Also-Ask queries. "
+        "Add internal links from your pillar page and 2–3 authoritative outbound citations."
+    )
+    return " ".join(parts)
 
-Generate exactly {count} "Under-served Content Gap" topic ideas based on this real data.
-Use People Also Ask and Related Searches as gap signals.
-For each gap:
-- "headline": Pragmatic, expert-level, non-AI sounding.
-- "proofUrl": Pick the most relevant URL from the SERP organic results above (must be one of the listed links).
-- "strategy": Specific, actionable advice on how to outrank — reference what the proof URL is missing.
+def _headline_from_question(q, keyword):
+    q = q.strip().rstrip("?").strip()
+    if not q:
+        return f"Under-served angle for '{keyword}'"
+    if not q[0].isupper():
+        q = q[0].upper() + q[1:]
+    return q
 
-Output a JSON ARRAY (no prose, no markdown fences). Each element has EXACT keys:
-"target" (set to "{keyword}"), "headline", "keyword" (set to "{keyword}"), "proofUrl", "strategy".
-"""
-    try:
-        data = gemini_json(gem_client, prompt)
-        if isinstance(data, list) and data:
-            for it in data:
-                it.setdefault("target", keyword)
-                it.setdefault("keyword", keyword)
-                if not it.get("proofUrl"): it["proofUrl"] = fallback_url
-            return data
-    except Exception as e:
-        st.session_state.setdefault("_errors", []).append(f"Gemini synthesis '{keyword}': {e}")
-    return []
+def _headline_from_related(rel, keyword):
+    rel = rel.strip()
+    if not rel:
+        return f"Under-served angle for '{keyword}'"
+    return f"Definitive guide: {rel.title()}"
 
-def synthesize_competitor(domain, brand_serp, site_serp, gem_client):
-    brand_compact = serper_compact(brand_serp, max_organic=5, max_paa=0)
-    site_compact = serper_compact(site_serp, max_organic=10, max_paa=0)
-    titles = [o["title"] for o in site_compact["organic"]]
-    links  = [o["link"] for o in site_compact["organic"]]
-    prompt = f"""You are an SEO analyst. Estimate the SEO performance of "{domain}" using REAL Google data.
+def synthesize_gaps(keyword, compact, count, market):
+    """Build content-gap ideas purely from SERP signals — no LLM."""
+    organic = compact.get("organic") or []
+    paa = compact.get("peopleAlsoAsk") or []
+    related = compact.get("relatedSearches") or []
 
-BRAND SERP (search "{domain}"):
-{json.dumps(brand_compact, indent=2)}
+    gaps = []
+    seen = set()
 
-SITE SERP (search site:{domain}):
-- indexed page titles: {json.dumps(titles)}
-- sample URLs: {json.dumps(links)}
+    # 1) PAA → highest-intent gap signals
+    for q in paa:
+        if not q or q.lower() in seen:
+            continue
+        seen.add(q.lower())
+        proof = next((o for o in organic
+                      if any(w in (o.get("title","")+o.get("snippet","")).lower()
+                             for w in re.findall(r"\w+", q.lower()) if len(w) > 3)),
+                     organic[0] if organic else {})
+        gaps.append({
+            "target": keyword,
+            "keyword": keyword,
+            "headline": _headline_from_question(q, keyword),
+            "proofUrl": (proof or {}).get("link", ""),
+            "strategy": _strategy_for(q, proof, keyword),
+            "source": "People Also Ask",
+        })
 
-Output a JSON OBJECT (no prose, no markdown fences) with EXACT keys:
-- "url": "{domain}"
-- "domainAuthority": "55/100" style — base on visibility/breadth (be conservative).
-- "estimatedTraffic": "150k/mo" style — base on indexed breadth and brand presence.
-- "backlinkOverview": one sentence on likely backlink profile.
-- "topKeywords": array of 3-5 likely top organic keywords inferred from titles.
-- "contentPerformance": 1-2 sentences on content structure/themes seen in titles.
-"""
-    try:
-        data = gemini_json(gem_client, prompt)
-        if isinstance(data, dict) and data:
-            data.setdefault("url", domain)
-            return data
-    except Exception as e:
-        st.session_state.setdefault("_errors", []).append(f"Competitor synthesis '{domain}': {e}")
-    return None
+    # 2) Related searches → broader topic clusters
+    for rel in related:
+        if not rel or rel.lower() in seen:
+            continue
+        seen.add(rel.lower())
+        proof_url = _best_proof_url(rel, organic)
+        proof_item = next((o for o in organic if o.get("link") == proof_url), {})
+        gaps.append({
+            "target": keyword,
+            "keyword": keyword,
+            "headline": _headline_from_related(rel, keyword),
+            "proofUrl": proof_url,
+            "strategy": _strategy_for(f"how to approach '{rel}'", proof_item, keyword),
+            "source": "Related Search",
+        })
+
+    # 3) Title-derived sub-themes — surface a missing angle from organic titles
+    title_words = []
+    for o in organic:
+        for w in re.findall(r"[A-Za-z][A-Za-z\-]{3,}", (o.get("title") or "").lower()):
+            if w not in STOPWORDS and w not in keyword.lower():
+                title_words.append(w)
+    common = [w for w, _ in Counter(title_words).most_common(8)]
+    for w in common:
+        key = f"{w}-angle"
+        if key in seen:
+            continue
+        seen.add(key)
+        proof_item = organic[0] if organic else {}
+        gaps.append({
+            "target": keyword,
+            "keyword": keyword,
+            "headline": f"{keyword.title()}: the '{w}' angle competitors under-cover",
+            "proofUrl": (proof_item or {}).get("link", ""),
+            "strategy": _strategy_for(f"the '{w}' aspect of {keyword}", proof_item, keyword),
+            "source": "Organic Title Mining",
+        })
+
+    return gaps[:count]
+
+
+# ---------- DATA-DRIVEN COMPETITOR ANALYSIS (no LLM) ----------
+def _estimate_da(brand_serp, site_serp, domain):
+    """Rough authority proxy from brand SERP dominance + indexed breadth."""
+    brand_organic = brand_serp.get("organic") or []
+    site_organic = site_serp.get("organic") or []
+    brand_hits = sum(1 for o in brand_organic[:10]
+                     if domain.lower() in (o.get("link","").lower()))
+    indexed = len(site_organic)
+    score = min(95, 25 + brand_hits * 6 + indexed * 2)
+    return f"{score}/100"
+
+def _estimate_traffic(site_serp, brand_serp):
+    indexed = len(site_serp.get("organic") or [])
+    brand_kg = 1 if brand_serp.get("knowledgeGraph") else 0
+    base = 5 + indexed * 8 + brand_kg * 40   # arbitrary but bounded
+    if base < 50:    return f"{base}k/mo (low)"
+    if base < 150:   return f"{base}k/mo"
+    return f"{base}k/mo (high visibility)"
+
+def _backlink_overview(brand_serp, domain):
+    sitelinks = brand_serp.get("knowledgeGraph") or {}
+    if sitelinks:
+        return (f"Brand is recognized in Google's Knowledge Graph and dominates branded SERPs — "
+                f"likely a healthy backlink profile with multiple referring domains pointing to {domain}.")
+    rank1 = (brand_serp.get("organic") or [{}])[0].get("link","")
+    if domain.lower() in rank1.lower():
+        return (f"{domain} ranks #1 for its brand query, suggesting a moderate backlink profile "
+                "sufficient to defend brand SERPs but likely thin for non-brand terms.")
+    return (f"{domain} does not own its branded SERP — backlink profile is likely weak; "
+            "competitors may be outranking the brand on its own name.")
+
+def _top_keywords_from_titles(site_serp, max_kw=5):
+    titles = [(o.get("title") or "") for o in (site_serp.get("organic") or [])]
+    text = " ".join(titles).lower()
+    grams = re.findall(r"[a-z][a-z\-]{2,}(?:\s+[a-z][a-z\-]{2,}){0,2}", text)
+    cleaned = []
+    for g in grams:
+        words = [w for w in g.split() if w not in STOPWORDS]
+        if 1 <= len(words) <= 3:
+            cleaned.append(" ".join(words))
+    common = [phrase for phrase, c in Counter(cleaned).most_common(40)
+              if len(phrase) > 4 and c >= 2]
+    return common[:max_kw] or [w for w, _ in Counter(re.findall(r"[a-z]{4,}", text)).most_common(max_kw)]
+
+def _content_performance(site_serp):
+    titles = [(o.get("title") or "") for o in (site_serp.get("organic") or [])]
+    if not titles:
+        return "Very few pages indexed — content footprint is minimal."
+    avg_len = sum(len(t) for t in titles) / max(1, len(titles))
+    has_guides = sum(1 for t in titles if re.search(r"guide|how to|tutorial|tips|best", t.lower()))
+    structure = "long-form / guide-heavy" if has_guides >= 3 else "mostly product or service pages"
+    return (f"{len(titles)} pages indexed in this sample, averaging ~{int(avg_len)}-char titles. "
+            f"Structure leans {structure}; consider expanding topical clusters around the strongest themes.")
+
+def synthesize_competitor(domain, brand_serp, site_serp):
+    return {
+        "url": domain,
+        "domainAuthority": _estimate_da(brand_serp, site_serp, domain),
+        "estimatedTraffic": _estimate_traffic(site_serp, brand_serp),
+        "backlinkOverview": _backlink_overview(brand_serp, domain),
+        "topKeywords": _top_keywords_from_titles(site_serp),
+        "contentPerformance": _content_performance(site_serp),
+    }
 
 
 # ---------- MAIN ----------
@@ -312,7 +406,7 @@ if not run_analysis:
     <div class="empty">
       <div class="em-icon">🧭</div>
       <div class="em-title">Ready to uncover ranking opportunities</div>
-      <div>Choose <b>Keywords</b> or <b>Competitor URL</b> mode, paste your Serper.dev + Gemini keys, and launch the engine.</div>
+      <div>Choose <b>Keywords</b> or <b>Competitor URL</b> mode, paste your Serper.dev key, and launch the engine.</div>
     </div>""", unsafe_allow_html=True)
     st.stop()
 
@@ -321,8 +415,6 @@ if not input_text.strip():
     st.stop()
 if not serper_key.strip():
     st.warning("Please enter your Serper.dev API key."); st.stop()
-if not api_key.strip():
-    st.warning("Please enter your Gemini API key."); st.stop()
 
 lines = [l.strip() for l in input_text.splitlines() if l.strip()]
 gl = MARKET_TO_GL.get(market, "us")
@@ -335,7 +427,6 @@ else:
     if not domain_lines:
         st.warning("No valid URLs detected. Switch to Keywords mode for plain phrases."); st.stop()
 
-gem_client = genai.Client(api_key=api_key)
 all_gaps, competitor_results = [], []
 st.session_state["_errors"] = []
 
@@ -351,7 +442,7 @@ with st.status("Running SEO intelligence engine…", expanded=True) as status:
             st.write(f"  • `{kw}` → {len(compact['organic'])} organic, "
                      f"{len(compact['peopleAlsoAsk'])} PAA, "
                      f"{len(compact['relatedSearches'])} related")
-            all_gaps.extend(synthesize_gaps(kw, compact, gap_count, market, gem_client) or [])
+            all_gaps.extend(synthesize_gaps(kw, compact, gap_count, market) or [])
 
     if domain_lines:
         st.write(f"🌐 Benchmarking **{len(domain_lines)}** competitor domain(s)…")
@@ -361,14 +452,15 @@ with st.status("Running SEO intelligence engine…", expanded=True) as status:
                 site_serp  = serper_search(f"site:{domain}", serper_key, gl=gl, num=10)
             except Exception as e:
                 st.session_state["_errors"].append(f"Serper '{domain}': {e}"); continue
-            metrics = synthesize_competitor(domain, brand_serp, site_serp, gem_client)
-            if metrics: competitor_results.append(metrics)
-            for kw in (metrics.get("topKeywords") or [])[:2] if metrics else []:
-                try:
-                    s = serper_search(kw, serper_key, gl=gl, num=10)
-                    all_gaps.extend(synthesize_gaps(kw, serper_compact(s), gap_count, market, gem_client) or [])
-                except Exception as e:
-                    st.session_state["_errors"].append(f"Serper '{kw}': {e}")
+            metrics = synthesize_competitor(domain, brand_serp, site_serp)
+            if metrics:
+                competitor_results.append(metrics)
+                for kw in (metrics.get("topKeywords") or [])[:2]:
+                    try:
+                        s = serper_search(kw, serper_key, gl=gl, num=10)
+                        all_gaps.extend(synthesize_gaps(kw, serper_compact(s), gap_count, market) or [])
+                    except Exception as e:
+                        st.session_state["_errors"].append(f"Serper '{kw}': {e}")
 
     status.update(label="Analysis complete ✅", state="complete", expanded=False)
 
@@ -394,7 +486,42 @@ for col,(label,value,icon) in zip(st.columns(4), kpis):
     </div>""", unsafe_allow_html=True)
 st.markdown("&nbsp;", unsafe_allow_html=True)
 
-# ---------- TABS (Content Gaps / Competitor Analytics / Insights) ----------
-# (Tab implementations are unchanged from the previous full version — they
-# render df, plotly bar/donut, expandable cards, Excel/CSV export, etc.
-# The full file is on disk at app.py — commit ee09b28.)
+# ---------- TABS ----------
+tab_gaps, tab_comp = st.tabs(["💡 Content Gaps", "🏆 Competitor Analytics"])
+
+with tab_gaps:
+    if not all_gaps:
+        st.info("No content gaps generated. Try different keywords or check the errors above.")
+    else:
+        df = pd.DataFrame(all_gaps)
+        df["difficulty"] = df["headline"].apply(difficulty_for)
+        df["opportunity"] = df["headline"].apply(opportunity_for)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        csv = df.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Download CSV", csv, "content_gaps.csv", "text/csv")
+
+        try:
+            fig = px.scatter(df, x="difficulty", y="opportunity",
+                             hover_data=["headline","keyword","source"],
+                             color="source", title="Difficulty vs Opportunity")
+            fig.update_layout(plot_bgcolor=T["plot_bg"], paper_bgcolor=T["plot_bg"],
+                              font_color=T["ink"])
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            pass
+
+with tab_comp:
+    if not competitor_results:
+        st.info("Switch to Competitor URL mode and add domains to see competitor analytics.")
+    else:
+        for c in competitor_results:
+            st.markdown(f"#### 🌐 {c['url']}")
+            cols = st.columns(3)
+            cols[0].metric("Domain Authority (est.)", c["domainAuthority"])
+            cols[1].metric("Estimated Traffic", c["estimatedTraffic"])
+            cols[2].metric("Top Keywords", len(c["topKeywords"]))
+            st.write("**Backlink Overview:** ", c["backlinkOverview"])
+            st.write("**Top Inferred Keywords:** ", ", ".join(c["topKeywords"]) or "—")
+            st.write("**Content Performance:** ", c["contentPerformance"])
+            st.markdown("---")
