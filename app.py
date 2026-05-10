@@ -74,9 +74,8 @@ ARTICLE_STARTERS = {"how","what","why","when","where","which","who",
 
 JUNK_QUERY_TOKENS = {"synonym","synonyms","pdf","doc","docx","ppt","pptx","ebook",
                      "wikipedia","wiki","translate","translation","login","logo",
-                     "youtube","video","videos","picture","pictures","images","image",
-                     "crack","torrent","jobs","salary","salaries","resume","cv",
-                     "near","quizlet","reddit","quora"}
+                     "youtube","picture","pictures","images","image",
+                     "crack","torrent","resume","cv","quizlet"}
 
 def is_junk_query(query):
     ql = (query or "").lower()
@@ -326,7 +325,7 @@ with st.sidebar:
     topics_per_keyword = st.slider("Topic ideas per keyword (max)", 5, 15, 10,
         help="Quality over quantity. The tool returns fewer if it can't find enough strong, unique ideas.")
     competitors_per_keyword = st.slider("Competitors mined per keyword", 1, 5, 3)
-    min_new_tokens = st.slider("Gap strictness (min new words)", 1, 4, 2,
+    min_new_tokens = st.slider("Gap strictness (min new words)", 1, 4, 1,
         help="Higher = stricter. Topic must introduce this many words your site doesn't cover.")
     use_expansion = st.checkbox("Query expansion (richer ideas, more API calls)", value=True)
 
@@ -479,7 +478,21 @@ def to_article_title(query):
     if " for sale" in ql or ql.startswith("buy "):
         return f"{q.title()}: Where to Buy & What to Look For ({Y})"
 
-    # NO GENERIC FALLBACK — skip if no specific template fits
+    # "X for Y" — common modifier pattern (e.g. "feedlot software for cattle")
+    if " for " in ql:
+        return f"{q.title()}: A Practical Guide ({Y})"
+
+    # "X management/system/strategy/process/techniques"  — operational topic
+    if any(w in ql for w in [" management"," system"," strategy"," strategies",
+                             " process"," techniques"," practices"," methods"]):
+        return f"{q.title()}: Practical Playbook for {Y}"
+
+    # Substantive 3+ word query with a clear modifier (e.g. "cattle feedlot management")
+    # Keep the original phrasing but frame it as a focused guide.
+    if len(q.split()) >= 3:
+        return f"{q.title()}: A Focused Guide ({Y})"
+
+    # 2-word phrase — too thin for a clear angle without context
     return None
 
 def rationale_for(source, comp_domain):
@@ -753,14 +766,11 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
                 raw_query=question,
             )
 
-        # Related searches — transform into article titles, drop brand-modified queries
+        # Related searches — transform into article titles
         for rel in related:
             rq = rel.get("query") if isinstance(rel, dict) else rel
             rq = (rq or "").strip()
             if not rq: continue
-            # Skip queries dominated by a competitor brand/product (e.g. "PcMars farm software")
-            if has_brand_modifier(rq, keyword_tokens):
-                continue
             add(
                 topic=rq,
                 intent_hint=classify_intent(rq),
