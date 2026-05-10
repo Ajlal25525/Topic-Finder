@@ -49,10 +49,10 @@ ARTICLE_URL_HINTS = ["/blog/","/article/","/articles/","/post/","/posts/","/guid
                      "/case-stud","/whitepaper","/ebook","/tutorial","/how-to"]
 
 QUERY_VARIANTS = [
-    "{kw}",
-    "best {kw}",
-    "{kw} guide",
-    "how to use {kw}",
+    "{kw}",                # base — broad
+    "what is {kw}",        # TOFU — awareness/informational
+    "best {kw}",           # MOFU — consideration/commercial
+    "{kw} pricing",        # BOFU — decision/transactional
 ]
 
 CURRENT_YEAR = 2026
@@ -331,7 +331,7 @@ with st.sidebar:
 
     st.markdown('<div style="margin-top:18px;"></div>', unsafe_allow_html=True)
     run_analysis = st.button("🚀 Run Topic Research", type="primary", use_container_width=True)
-    st.caption("Developed By Ajlal Habib — real Google SERP data")
+    st.caption("Powered by Serper.dev — real Google SERP data")
 
 
 # ---------- HELPERS ----------
@@ -518,6 +518,24 @@ def rationale_for(source, comp_domain):
                 "already validated demand and the SERP rewards this format. Match their depth, then "
                 "beat them on freshness, originality, and structured data.")
     return "Real SERP signal — covering this fills a measurable gap in your content map."
+
+def funnel_stage(intent, topic=""):
+    """Map intent → funnel stage (TOFU/MOFU/BOFU). Same convention as Ahrefs."""
+    t = (topic or "").lower()
+    # Strong BOFU signals override
+    if any(w in t for w in ["pricing","price","cost","demo","free trial","discount",
+                            "buy ","quote","coupon","deal"]):
+        return "BOFU"
+    # Strong MOFU signals override
+    if any(w in t for w in [" vs ","comparison","alternative","alternatives",
+                            "best ","top ","review","reviews"," compared"]):
+        return "MOFU"
+    # Otherwise map from intent
+    return {
+        "Informational": "TOFU",
+        "Commercial":    "MOFU",
+        "Transactional": "BOFU",
+    }.get(intent, "TOFU")
 
 def channel_score(topic, intent, source):
     """LLM-first (AEO) | Google-first (SEO) | Both."""
@@ -706,6 +724,7 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
             "topic_idea": display_topic,
             "raw_query": raw_query or topic,
             "intent": intent,
+            "funnel": funnel_stage(intent, display_topic),
             "channel": channel_score(display_topic, intent, source),
             "source": source,
             "why_cover": rationale_for(source, comp_domain),
@@ -958,13 +977,16 @@ google_count = sum(1 for g in all_ideas if "Google" in g["channel"] or "Both" in
 unique_competitors = len({g["ranking_competitor"] for g in all_ideas if g["ranking_competitor"]})
 
 community_count = sum(1 for g in all_ideas if g["source"] in ("Reddit Discussion","Quora Question"))
+tofu_count = sum(1 for g in all_ideas if g.get("funnel") == "TOFU")
+mofu_count = sum(1 for g in all_ideas if g.get("funnel") == "MOFU")
+bofu_count = sum(1 for g in all_ideas if g.get("funnel") == "BOFU")
 
 kpis = [
-    ("Seed Keywords", len(seed_keywords), "🎯"),
-    ("New Topic Ideas", len(all_ideas), "💡"),
+    ("Total Ideas", len(all_ideas), "💡"),
+    ("TOFU (Awareness)", tofu_count, "🌱"),
+    ("MOFU (Consideration)", mofu_count, "🎯"),
+    ("BOFU (Decision)", bofu_count, "💰"),
     ("Community Signals", community_count, "💬"),
-    ("LLM-Citation Topics", llm_count, "🤖"),
-    ("Google-Ranking Topics", google_count, "🔍"),
     ("Competitors Found", unique_competitors, "🏆"),
 ]
 cols = st.columns(len(kpis))
@@ -987,25 +1009,33 @@ else:
     st.markdown('<div class="section-title"><span class="accent"></span>Topic Ideas (Not Yet Covered on Your Site)</div>',
                 unsafe_allow_html=True)
 
-    fcol1, fcol2, fcol3 = st.columns([2, 2, 2])
+    FUNNEL_ORDER = ["TOFU", "MOFU", "BOFU"]
+
+    fcol1, fcol2, fcol3, fcol4 = st.columns(4)
     with fcol1:
-        ch_filter = st.multiselect("Channel",
-                                   sorted(df["channel"].unique()),
-                                   default=list(df["channel"].unique()))
+        funnel_filter = st.multiselect("Funnel stage",
+                                       [f for f in FUNNEL_ORDER if f in df["funnel"].unique()],
+                                       default=[f for f in FUNNEL_ORDER if f in df["funnel"].unique()],
+                                       help="TOFU = awareness, MOFU = consideration, BOFU = decision.")
     with fcol2:
         in_filter = st.multiselect("Intent",
                                    sorted(df["intent"].unique()),
                                    default=list(df["intent"].unique()))
     with fcol3:
+        ch_filter = st.multiselect("Channel",
+                                   sorted(df["channel"].unique()),
+                                   default=list(df["channel"].unique()))
+    with fcol4:
         src_filter = st.multiselect("Source",
                                     sorted(df["source"].unique()),
                                     default=list(df["source"].unique()))
 
-    fdf = df[df["channel"].isin(ch_filter) &
+    fdf = df[df["funnel"].isin(funnel_filter) &
              df["intent"].isin(in_filter) &
+             df["channel"].isin(ch_filter) &
              df["source"].isin(src_filter)].copy()
 
-    cols_order = ["topic_idea","source","channel","intent","why_cover",
+    cols_order = ["topic_idea","funnel","intent","channel","source","why_cover",
                   "ranking_competitor","competitor_url"]
     cols_order = [c for c in cols_order if c in fdf.columns]
 
@@ -1014,9 +1044,11 @@ else:
         use_container_width=True, hide_index=True,
         column_config={
             "topic_idea":         st.column_config.TextColumn("Topic Idea", width="large"),
-            "source":             st.column_config.TextColumn("Source", width="small"),
-            "channel":            st.column_config.TextColumn("Channel", width="small"),
+            "funnel":             st.column_config.TextColumn("Funnel", width="small",
+                                    help="TOFU = top of funnel (awareness), MOFU = middle (consideration), BOFU = bottom (decision)."),
             "intent":             st.column_config.TextColumn("Intent", width="small"),
+            "channel":            st.column_config.TextColumn("Channel", width="small"),
+            "source":             st.column_config.TextColumn("Source", width="small"),
             "why_cover":          st.column_config.TextColumn("Why Cover This", width="large"),
             "ranking_competitor": st.column_config.TextColumn("Source / Competitor", width="small"),
             "competitor_url":     st.column_config.LinkColumn("Source URL"),
