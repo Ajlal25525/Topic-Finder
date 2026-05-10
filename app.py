@@ -331,7 +331,7 @@ with st.sidebar:
 
     st.markdown('<div style="margin-top:18px;"></div>', unsafe_allow_html=True)
     run_analysis = st.button("🚀 Run Topic Research", type="primary", use_container_width=True)
-    st.caption("Powered by Serper.dev — real Google SERP data")
+    st.caption("Developed By Ajlal Habib — real Google SERP data")
 
 
 # ---------- HELPERS ----------
