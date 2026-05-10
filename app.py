@@ -55,6 +55,23 @@ QUERY_VARIANTS = [
     "how to use {kw}",
 ]
 
+CURRENT_YEAR = 2026
+
+GENERIC_MODIFIERS = {
+    "best","top","free","paid","cheap","affordable","budget","premium","luxury",
+    "easy","simple","beginner","beginners","advanced","professional","pro",
+    "online","cloud","mobile","desktop","web","web-based","saas","offline",
+    "open","open-source","enterprise","small","medium","large",
+    "new","modern","latest","ultimate","complete","comprehensive","essential",
+    "how","what","why","when","where","which","who","is","are","can","do","does","should","will",
+    "the","a","an","my","your","our",
+}
+
+ARTICLE_STARTERS = {"how","what","why","when","where","which","who",
+                    "best","top","guide","ultimate","complete","essential",
+                    "the","a","an","is","are","do","does","can","should","will",
+                    "introducing","everything","beginner","beginners","ultimate"}
+
 # ---------- CSS ----------
 st.markdown(f"""
 <style>
@@ -338,6 +355,113 @@ def classify_intent(text):
         return "Informational"
     return "Informational"
 
+def has_brand_modifier(query, seed_tokens):
+    """True if query starts with a non-seed, non-generic word (likely a brand/product name)."""
+    words = re.findall(r"[a-z][a-z\-]+", (query or "").lower())
+    if not words: return False
+    first = words[0]
+    if first in seed_tokens or first in GENERIC_MODIFIERS:
+        return False
+    return True
+
+def to_article_title(query):
+    """Transform a raw keyword/query into a real article-shaped headline."""
+    if not query: return ""
+    q = query.strip().rstrip("?")
+    ql = q.lower()
+    Y = CURRENT_YEAR
+
+    # already a question
+    if ql.startswith(("what ","how ","why ","when ","where ","which ","who ",
+                      "is ","are ","can ","do ","does ","should ","will ",
+                      "how to ")):
+        s = q[0].upper() + q[1:]
+        return s if s.endswith("?") else s + "?"
+
+    # "best X" / "top X"
+    if ql.startswith("best "):
+        rest = q[5:].strip()
+        return f"The 9 Best {rest.title()} in {Y} (Tested, Compared & Ranked)"
+    if ql.startswith("top "):
+        rest = q[4:].strip()
+        return f"Top {rest.title()}: {Y} Buyer's Guide With Real Comparisons"
+
+    # "free X"
+    if ql.startswith("free "):
+        rest = q[5:].strip()
+        return f"Are Free {rest.title()} Worth It? Honest {Y} Review"
+
+    # "cheap / affordable / budget X"
+    if ql.startswith(("cheap ","affordable ","budget ","low cost ","low-cost ")):
+        parts = q.split(" ", 1)
+        rest = parts[1] if len(parts) > 1 else q
+        return f"{rest.title()} on a Budget: {Y}'s Most Affordable Options"
+
+    # "easy / simple / beginner X"
+    if ql.startswith(("easy ","simple ","beginner ","beginners ")):
+        parts = q.split(" ", 1)
+        rest = parts[1] if len(parts) > 1 else q
+        return f"The Easiest {rest.title()} for Beginners ({Y} Picks)"
+
+    # "online / cloud / mobile / web-based X"
+    if ql.startswith(("online ","cloud ","mobile ","web-based ","web based ","saas ")):
+        parts = q.split(" ", 1)
+        prefix = parts[0]; rest = parts[1] if len(parts) > 1 else q
+        return f"{prefix.title()} {rest.title()}: {Y} Comparison Guide"
+
+    # "open source X"
+    if ql.startswith(("open source ","open-source ")):
+        rest = re.sub(r"^open[ \-]source ", "", q, flags=re.I)
+        return f"Open-Source {rest.title()}: Pros, Cons & Top Picks"
+
+    # "X for Y"
+    if " for " in ql:
+        return f"{q.title()}: A Complete {Y} Guide"
+
+    # "X vs Y"
+    if " vs " in ql or " vs. " in ql:
+        return f"{q.title()}: Which Should You Choose in {Y}?"
+
+    # "X cost / price / pricing"
+    if any(w in ql for w in [" cost", " price", " pricing"]):
+        base = re.sub(r"\b(cost|price|pricing)\b", "", q, flags=re.I).strip()
+        return f"How Much Does {base.title()} Cost in {Y}? Real Pricing Breakdown"
+
+    # "X download"
+    if "download" in ql:
+        base = ql.replace("download","").strip()
+        return f"Where to Download {base.title()}: Safe & Verified Sources"
+
+    # "X alternative(s)"
+    if "alternative" in ql:
+        return f"{q.title()}: Best Alternatives Compared ({Y})"
+
+    # "X review(s)"
+    if "review" in ql:
+        return f"{q.title()}: In-Depth {Y} Review (Pros, Cons, Verdict)"
+
+    # "X for sale" / "buy X"
+    if " for sale" in ql or ql.startswith("buy "):
+        return f"{q.title()}: Where to Buy & What to Look For ({Y})"
+
+    # default — make it a definitive guide
+    return f"The Complete Guide to {q.title()} ({Y} Edition)"
+
+def rationale_for(source, comp_domain):
+    if "People Also Ask" in source:
+        return ("Google explicitly surfaces this question on the SERP — direct, validated demand. "
+                "Pages that answer it cleanly often capture the AI Overview slot AND get cited by "
+                "ChatGPT/Perplexity for the same question.")
+    if "Related Search" in source:
+        return ("Google's 'searches related to' identifies this as part of the topic cluster around "
+                "your seed keyword. Covering it strengthens topical authority and unlocks long-tail "
+                "traffic the head term doesn't capture.")
+    if "Competitor Article" in source and comp_domain:
+        return (f"{comp_domain} currently captures search traffic with this exact angle — they've "
+                "already validated demand and the SERP rewards this format. Match their depth, then "
+                "beat them on freshness, originality, and structured data.")
+    return "Real SERP signal — covering this fills a measurable gap in your content map."
+
 def channel_score(topic, intent, source):
     """LLM-first (AEO) | Google-first (SEO) | Both."""
     t = (topic or "").lower()
@@ -357,21 +481,18 @@ def channel_score(topic, intent, source):
 
 # ---------- QUALITY FILTER FOR COMPETITOR ARTICLES ----------
 def is_quality_article(title, link, keyword_tokens):
-    """
-    Reject competitor nav, brand, category pages. Keep only real articles.
-    """
+    """Reject competitor nav, brand, category pages. Keep real articles."""
     if not title or not link: return False
     title = title.strip()
-    if len(title) < 25 or len(title) > 200: return False
+    if len(title) < 22 or len(title) > 220: return False
 
-    # "X | Brand" or "X - Brand" with short X → likely nav/category
+    # "X | Brand" or "X - Brand" with very short X → nav/category
     for sep in (" | ", " - ", " – ", " — "):
         if sep in title:
             first = title.split(sep)[0].strip()
-            if len(first.split()) < 4:
+            if len(first.split()) < 3:
                 return False
 
-    # First segment is a known nav word
     first_seg = re.split(r"[\|\-–—:]", title)[0].strip().lower()
     if first_seg in NAV_WORDS:
         return False
@@ -380,22 +501,22 @@ def is_quality_article(title, link, keyword_tokens):
     if len(words) < 5:
         return False
 
-    # Must include at least one seed-keyword token
-    title_tokens = tokens_of(title)
-    if not (title_tokens & keyword_tokens):
+    if not (tokens_of(title) & keyword_tokens):
         return False
 
-    # URL hint OR strong article title (How/What/Why/Best/Guide/Top/Ultimate/Complete + length)
+    # Quality signals — pass if any one is true
     url_lower = link.lower()
-    has_url_hint = any(h in url_lower for h in ARTICLE_URL_HINTS)
-    first_word = words[0].lower()
-    is_article_shape = first_word in {"how","what","why","when","where","which",
-                                      "best","top","guide","ultimate","complete",
-                                      "the","a","an","is","are","why"} or "?" in title
-    if not has_url_hint and not (is_article_shape and len(words) >= 6):
-        return False
+    has_url_hint  = any(h in url_lower for h in ARTICLE_URL_HINTS)
+    has_year      = bool(re.search(r"20[2-9]\d", title))
+    has_number    = bool(re.search(r"\b\d{1,3}\b", title))
+    first_word    = words[0].lower().strip(":,")
+    has_starter   = first_word in ARTICLE_STARTERS or "?" in title
+    long_enough   = len(words) >= 7
 
-    return True
+    if has_url_hint:
+        return True
+    # Need >=2 of the article-shape signals
+    return sum([has_starter, has_year, has_number, long_enough]) >= 2
 
 
 # ---------- SERPER ----------
@@ -470,21 +591,29 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
     ideas, seen = [], set()
 
     def add(topic, intent_hint, source, comp_domain, comp_url, snippet,
-            how_to_rank, how_for_llm):
-        key = (topic or "").lower().strip()
+            how_to_rank, how_for_llm, raw_query=None):
+        # Use the transformed article-shaped title, except for competitor articles
+        # (which are already real titles).
+        if source.startswith("Competitor Article"):
+            display_topic = topic
+        else:
+            display_topic = to_article_title(topic)
+
+        key = (display_topic or "").lower().strip()
         if not key or key in seen: return
-        if not is_new_topic(topic, profile, min_new_tokens=min_new_tokens): return
-        # must mention at least one seed-keyword token (relevance gate)
-        if not (tokens_of(topic) & keyword_tokens): return
+        if not is_new_topic(display_topic, profile, min_new_tokens=min_new_tokens): return
+        if not (tokens_of(display_topic) & keyword_tokens): return
         seen.add(key)
-        intent = intent_hint or classify_intent(topic)
+        intent = intent_hint or classify_intent(display_topic)
         ideas.append({
             "your_site": your_domain,
             "seed_keyword": keyword,
-            "topic_idea": topic,
+            "topic_idea": display_topic,
+            "raw_query": raw_query or topic,
             "intent": intent,
-            "channel": channel_score(topic, intent, source),
+            "channel": channel_score(display_topic, intent, source),
             "source": source,
+            "why_cover": rationale_for(source, comp_domain),
             "ranking_competitor": comp_domain,
             "competitor_url": comp_url,
             "what_they_cover": (snippet or "")[:240],
@@ -519,7 +648,7 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
                 if d and d != your_domain and d not in competitor_domains:
                     competitor_domains.append(d)
 
-        # PAA — real user questions
+        # PAA — real user questions (already topic-shaped)
         for q in paa:
             question = (q.get("question") or "").strip()
             add(
@@ -538,27 +667,33 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
                     "Use the question verbatim as an H2 with a clean 2-4 sentence answer right "
                     "below. LLMs preferentially cite question/answer pairs. Add FAQPage schema."
                 ),
+                raw_query=question,
             )
 
-        # Related searches — cluster expansion
+        # Related searches — transform into article titles, drop brand-modified queries
         for rel in related:
             rq = rel.get("query") if isinstance(rel, dict) else rel
             rq = (rq or "").strip()
+            if not rq: continue
+            # Skip queries dominated by a competitor brand/product (e.g. "PcMars farm software")
+            if has_brand_modifier(rq, keyword_tokens):
+                continue
             add(
                 topic=rq,
                 intent_hint=classify_intent(rq),
                 source="Related Search",
                 comp_domain="",
                 comp_url="",
-                snippet="Surfaced by Google as a related query — strong topic-cluster signal.",
+                snippet="Google surfaces this as a related query — strong topic-cluster signal.",
                 how_to_rank=(
                     f"Build a dedicated supporting page for '{rq}' and internally link it to your "
-                    f"'{keyword}' pillar to build topic-cluster authority Google rewards."
+                    f"'{keyword}' pillar. Add a comparison table, FAQ, and schema markup."
                 ),
                 how_for_llm=(
                     "Cover this as a distinct subtopic with its own H2 inside the cluster. "
                     "LLMs cite breadth — full cluster coverage raises citation odds."
                 ),
+                raw_query=rq,
             )
 
     # Competitor articles (real, filtered) — using base keyword
@@ -583,6 +718,7 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
                     "bulleted key takeaways, definitions block, citations to primary sources. "
                     "Add Article schema."
                 ),
+                raw_query=art["title"],
             )
 
     # Priority order: PAA → Competitor articles → Related
@@ -741,8 +877,8 @@ else:
              df["intent"].isin(in_filter) &
              df["source"].isin(src_filter)].copy()
 
-    cols_order = ["topic_idea","channel","intent","source",
-                  "ranking_competitor","competitor_url",
+    cols_order = ["topic_idea","why_cover","channel","intent","source",
+                  "raw_query","ranking_competitor","competitor_url",
                   "what_they_cover","how_to_rank_google","how_to_get_cited_by_llms",
                   "seed_keyword","difficulty","opportunity"]
     cols_order = [c for c in cols_order if c in fdf.columns]
@@ -751,10 +887,12 @@ else:
         fdf[cols_order],
         use_container_width=True, hide_index=True,
         column_config={
-            "topic_idea":               st.column_config.TextColumn("Topic Idea", width="large"),
+            "topic_idea":               st.column_config.TextColumn("Topic Idea (Article Headline)", width="large"),
+            "why_cover":                st.column_config.TextColumn("Why Cover This", width="large"),
             "channel":                  st.column_config.TextColumn("Best Channel", width="small"),
             "intent":                   st.column_config.TextColumn("Intent", width="small"),
             "source":                   st.column_config.TextColumn("Source", width="small"),
+            "raw_query":                st.column_config.TextColumn("Underlying Query", width="medium"),
             "ranking_competitor":       st.column_config.TextColumn("Competitor", width="small"),
             "competitor_url":           st.column_config.LinkColumn("Competitor URL"),
             "what_they_cover":          st.column_config.TextColumn("What They Cover", width="medium"),
