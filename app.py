@@ -378,6 +378,38 @@ def jaccard(a, b):
     if not a or not b: return 0.0
     return len(a & b) / len(a | b)
 
+def balance_funnel_mix(ideas, count):
+    """Return `count` ideas with ~50% TOFU and ~50% commercial (MOFU+BOFU).
+    If one pool is short, the other pool fills the remaining slots."""
+    if not ideas: return []
+    tofu = [i for i in ideas if i.get("funnel") == "TOFU"]
+    mofu = [i for i in ideas if i.get("funnel") == "MOFU"]
+    bofu = [i for i in ideas if i.get("funnel") == "BOFU"]
+    commercial = mofu + bofu  # MOFU first, then BOFU
+
+    target_tofu       = count // 2
+    target_commercial = count - target_tofu
+
+    take_tofu = min(target_tofu, len(tofu))
+    take_com  = min(target_commercial, len(commercial))
+
+    # If a pool is short, fill leftover from the other pool
+    leftover = count - take_tofu - take_com
+    if leftover > 0 and len(tofu) > take_tofu:
+        extra = min(leftover, len(tofu) - take_tofu)
+        take_tofu += extra; leftover -= extra
+    if leftover > 0 and len(commercial) > take_com:
+        take_com  += min(leftover, len(commercial) - take_com)
+
+    # Interleave so the table reads as a balanced mix, not all TOFU then all MOFU
+    selected_tofu = tofu[:take_tofu]
+    selected_com  = commercial[:take_com]
+    out, i, j = [], 0, 0
+    while i < len(selected_tofu) or j < len(selected_com):
+        if j < len(selected_com): out.append(selected_com[j]); j += 1
+        if i < len(selected_tofu): out.append(selected_tofu[i]); i += 1
+    return out[:count]
+
 def dedupe_topics(ideas, similarity_threshold=0.55):
     """Drop topics with high token overlap with already-kept ideas."""
     kept, kept_token_sets = [], []
@@ -607,15 +639,55 @@ def _clean_reddit_title(title):
     title = re.sub(r"\s*[:\-]\s*r/\w+.*$", "", title or "", flags=re.I)
     title = re.sub(r"\s*\|\s*Reddit.*$", "", title, flags=re.I)
     title = re.sub(r"\s*-\s*Reddit\s*$", "", title, flags=re.I)
-    return title.strip()
+    title = re.sub(r"^r/\w+\s*[:\-]?\s*", "", title, flags=re.I)
+    title = re.sub(r"^\[[^\]]+\]\s*", "", title)  # strip leading [TAG]
+    return title.strip(' "\'')
 
 def _clean_quora_title(title):
     title = re.sub(r"\s*-\s*Quora\s*$", "", title or "", flags=re.I)
     title = re.sub(r"\s*\|\s*Quora.*$", "", title, flags=re.I)
-    return title.strip()
+    return title.strip(' "\'')
 
-def fetch_community_topics(keyword, serper_key, gl, max_results=8):
-    """Real human questions and discussions from Reddit and Quora."""
+# Personal anecdote / discussion markers that signal NOT a searchable topic
+_DISCUSSION_STARTS = (
+    "update","updates","psa","fyi","ama","til","eli5","ot:","rant",
+    "for those","anyone else","my ","i ","i'm ","i'll ","i've ","we ","we're ",
+    "our ","just ","first ","today","yesterday","help!","[help]","[update]",
+)
+_QUESTION_STARTS = ("how ","what ","what's ","why ","when ","where ","which ",
+                    "who ","is ","are ","can ","could ","do ","does ","did ",
+                    "should ","would ","will ","best ")
+
+def is_searchable_question(title, keyword_tokens):
+    """True only if the title looks like a real search query, not a discussion thread."""
+    if not title: return False
+    t = title.strip()
+    tl = t.lower()
+
+    if len(t) < 18 or len(t) > 140: return False
+    words = t.split()
+    if not (4 <= len(words) <= 14): return False
+
+    # Reject personal-anecdote / discussion markers
+    if tl.startswith(_DISCUSSION_STARTS): return False
+
+    # Reject if starts with brackets, quotes, numbers, special chars
+    if t[0] in ('"', "'", "[", "(", "<", "*"): return False
+    if re.match(r"^\d+\s*[a-z]?\s+", tl): return False  # "60K …", "3500m2 …"
+
+    # Reject obvious story/announcement signals
+    if re.search(r"\b(built|made|launched|created|started|finished|finally)\b", tl):
+        return False
+
+    # Must contain at least one seed-keyword token (relevance)
+    if not (tokens_of(t) & keyword_tokens): return False
+
+    # Must be question-shaped: ends with ? OR starts with a question word
+    is_question = t.endswith("?") or any(tl.startswith(q) for q in _QUESTION_STARTS)
+    return is_question
+
+def fetch_community_topics(keyword, serper_key, gl, keyword_tokens, max_results=10):
+    """Real, searchable questions from Reddit and Quora — discussions filtered out."""
     out = {"reddit": [], "quora": []}
     try:
         rs = serper_search(f"site:reddit.com {keyword}", serper_key, gl=gl, num=max_results)
@@ -623,7 +695,7 @@ def fetch_community_topics(keyword, serper_key, gl, max_results=8):
             title = _clean_reddit_title(o.get("title", ""))
             link  = o.get("link", "")
             snip  = o.get("snippet", "")
-            if title and len(title) >= 15 and len(title.split()) >= 4:
+            if is_searchable_question(title, keyword_tokens):
                 out["reddit"].append({"title": title, "link": link, "snippet": snip})
     except Exception:
         pass
@@ -633,7 +705,7 @@ def fetch_community_topics(keyword, serper_key, gl, max_results=8):
             title = _clean_quora_title(o.get("title", ""))
             link  = o.get("link", "")
             snip  = o.get("snippet", "")
-            if title and len(title) >= 15 and len(title.split()) >= 4:
+            if is_searchable_question(title, keyword_tokens):
                 out["quora"].append({"title": title, "link": link, "snippet": snip})
     except Exception:
         pass
@@ -808,8 +880,8 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
                 raw_query=rq,
             )
 
-    # Community discussions — Reddit + Quora (real human questions / pain points)
-    community = fetch_community_topics(keyword, serper_key, gl, max_results=8)
+    # Community questions — Reddit + Quora, only real searchable questions
+    community = fetch_community_topics(keyword, serper_key, gl, keyword_tokens, max_results=10)
     for r in community["reddit"]:
         add(
             topic=r["title"],
@@ -869,7 +941,9 @@ def research_keyword(keyword, your_domain, profile, serper_key, gl,
     ideas.sort(key=lambda g: _p(g["source"]))
     # Dedupe near-identical topic ideas (Jaccard >= 0.55)
     ideas = dedupe_topics(ideas, similarity_threshold=0.55)
-    return ideas[:count]
+    # Enforce ~50/50 TOFU vs commercial mix
+    ideas = balance_funnel_mix(ideas, count)
+    return ideas
 
 
 # ---------- MAIN ----------
